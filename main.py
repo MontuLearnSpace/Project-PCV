@@ -1,199 +1,614 @@
 import cv2
 import numpy as np
-import time
 import random
 import math
+from collections import deque
 
-# ==========================================
-# FUNGSI PENGOLAHAN CITRA MANUAL (NUMPY)
-# ==========================================
+# ==========================================================
+# MANUAL MORPHOLOGY
+# ==========================================================
+def erosion(img):
+    h, w = img.shape
+    result = np.zeros_like(img)
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            area = img[y - 1:y + 2, x - 1:x + 2]
+            if np.all(area == 255):
+                result[y, x] = 255
+    return result
 
-def manual_hsv_mask(hsv_frame, lower_hsv, upper_hsv):
-    """Masking warna kulit secara manual dengan operasi boolean NumPy."""
-    h, s, v = hsv_frame[:, :, 0], hsv_frame[:, :, 1], hsv_frame[:, :, 2]
-    mask = (
-        (h >= lower_hsv[0]) & (h <= upper_hsv[0]) &
-        (s >= lower_hsv[1]) & (s <= upper_hsv[1]) &
-        (v >= lower_hsv[2]) & (v <= upper_hsv[2])
+
+def dilation(img):
+    h, w = img.shape
+    result = np.zeros_like(img)
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            area = img[y - 1:y + 2, x - 1:x + 2]
+            if np.any(area == 255):
+                result[y, x] = 255
+    return result
+
+def opening(img):
+    eroded = erosion(img)
+    opened = dilation(eroded)
+    return opened
+
+def closing(img):
+    dilated = dilation(img)
+    closed = erosion(dilated)
+    return closed
+
+# ==========================================================
+# MANUAL ALPHA BLENDING
+# ==========================================================
+def overlay_png(background, sprite, x, y):
+    if sprite is None:
+        return background
+    h, w = sprite.shape[:2]
+    if x < 0:
+        return background
+    if y < 0:
+        return background
+    if x + w > background.shape[1]:
+        return background
+    if y + h > background.shape[0]:
+        return background
+    roi = background[y:y+h, x:x+w]
+    # PNG transparan
+    if sprite.shape[2] == 4:
+        alpha = sprite[:, :, 3] / 255.0
+        for c in range(3):
+            roi[:, :, c] = (
+                alpha * sprite[:, :, c]
+                +
+                (1 - alpha) * roi[:, :, c]
+            )
+    # JPG / RGB biasa
+    else:
+        roi[:] = sprite
+    background[y:y+h, x:x+w] = roi
+    return background
+
+# ==========================================================
+# LOAD WEAPON
+# ==========================================================
+sword = cv2.imread(
+    "assets/sword.png",
+    cv2.IMREAD_UNCHANGED
+)
+if sword is None:
+    raise Exception(
+        "ERROR: assets/sword.png tidak ditemukan"
     )
-    return (mask.astype(np.uint8) * 255)
+sword = cv2.resize(
+    sword,
+    (222, 222)
+)
 
-def manual_dilate(binary_mask):
-    """Dilasi manual menggunakan pergeseran matriks (np.roll)."""
-    up = np.roll(binary_mask, -1, axis=0)
-    down = np.roll(binary_mask, 1, axis=0)
-    left = np.roll(binary_mask, -1, axis=1)
-    right = np.roll(binary_mask, 1, axis=1)
-    return binary_mask | up | down | left | right
+# ==========================================================
+# LOAD STONES
+# ==========================================================
+stone1 = cv2.imread(
+    "assets/stone1.png",
+    cv2.IMREAD_UNCHANGED
+)
+stone2 = cv2.imread(
+    "assets/stone2.png",
+    cv2.IMREAD_UNCHANGED
+)
+stone3 = cv2.imread(
+    "assets/stone3.png",
+    cv2.IMREAD_UNCHANGED
+)
+stone4 = cv2.imread(
+    "assets/stone4.png",
+    cv2.IMREAD_UNCHANGED
+)
+stone5 = cv2.imread(
+    "assets/stone5.png",
+    cv2.IMREAD_UNCHANGED
+)
+stone_imgs = [
+    stone1,
+    stone2,
+    stone3,
+    stone4,
+    stone5
+]
 
-def manual_erode(binary_mask):
-    """Erosi manual menggunakan pergeseran matriks."""
-    up = np.roll(binary_mask, -1, axis=0)
-    down = np.roll(binary_mask, 1, axis=0)
-    left = np.roll(binary_mask, -1, axis=1)
-    right = np.roll(binary_mask, 1, axis=1)
-    return binary_mask & up & down & left & right
+# ==========================================================
+# VALIDASI ASSET
+# ==========================================================
+for i, stone in enumerate(stone_imgs):
+    if stone is None:
+        raise Exception(
+            f"ERROR: assets/stone{i+1}.png tidak ditemukan"
+        )
 
-def manual_alpha_blend(bg_img, fg_img, x_center, y_center):
-    """Menempelkan objek foreground (dengan alpha) ke background secara manual."""
-    if x_center == 0 and y_center == 0: return bg_img
-    
-    fh, fw = fg_img.shape[:2]
-    bh, bw = bg_img.shape[:2]
-    
-    x1, y1 = int(x_center - fw/2), int(y_center - fh/2)
-    x2, y2 = x1 + fw, y1 + fh
-    
-    # Crop fg jika keluar batas
-    src_x1, src_y1 = 0, 0
-    src_x2, src_y2 = fw, fh
+# ==========================================================
+# DEBUG INFO
+# ==========================================================
+print("=" * 40)
+print("ASSET LOADED")
+print("=" * 40)
+print("Sword :", sword.shape)
 
-    if x1 < 0: src_x1 = abs(x1); x1 = 0
-    if y1 < 0: src_y1 = abs(y1); y1 = 0
-    if x2 > bw: src_x2 = fw - (x2 - bw); x2 = bw
-    if y2 > bh: src_y2 = fh - (y2 - bh); y2 = bh
+for i, stone in enumerate(stone_imgs):
+    print(
+        f"Stone {i+1}:",
+        stone.shape
+    )
+print("=" * 40)
 
-    if x2 <= x1 or y2 <= y1 or src_x2 <= src_x1 or src_y2 <= src_y1:
-        return bg_img
-    
-    # Ambil ROI dan sub-gambar fg yang valid
-    bg_roi = bg_img[y1:y2, x1:x2]
-    fg_cropped = fg_img[src_y1:src_y2, src_x1:src_x2]
-    
-    fg_rgb = fg_cropped[:, :, :3]
-    alpha = fg_cropped[:, :, 3] / 255.0
-    alpha = np.expand_dims(alpha, axis=2)
-    
-    blended = (fg_rgb * alpha) + (bg_roi * (1.0 - alpha))
-    bg_img[y1:y2, x1:x2] = blended.astype(np.uint8)
-    return bg_img
+# ==========================================================
+# CLASS STONE
+# ==========================================================
+class Stone:
+    def __init__(self):
+        self.respawn()
+    def respawn(self):
+        # Pilih bentuk batu secara acak
+        self.img = random.choice(stone_imgs)
+        # Ukuran acak
+        size = random.randint(50, 90)
+        self.img = cv2.resize(
+            self.img,
+            (size, size)
+        )
+        self.width = self.img.shape[1]
+        self.height = self.img.shape[0]
+        # Posisi spawn dari atas layar
+        self.x = random.randint(
+            20,
+            640 - self.width - 20
+        )
+        self.y = -self.height
+        # Kecepatan jatuh
+        self.speed = random.randint(
+            3,
+            7
+        )
+    def update(self):
+        self.y += self.speed
+    def draw(self, frame):
+        overlay_png(
+            frame,
+            self.img,
+            self.x,
+            self.y
+        )
 
-# ==========================================
-# INISIALISASI GAME & KAMERA
-# ==========================================
-
-# Validasi Aset
-sword_img = cv2.imread('assets/sword.png', cv2.IMREAD_UNCHANGED)
-rock_img = cv2.imread('assets/rock.png', cv2.IMREAD_UNCHANGED)
-
-if sword_img is None or rock_img is None:
-    print("Error: Aset gambar tidak ditemukan di folder assets/")
-    exit()
-
-sword_img = cv2.resize(sword_img, (150, 150))
-rock_img = cv2.resize(rock_img, (80, 80))
-
-cap = cv2.VideoCapture(0)
-
-# Rentang warna HSV untuk kulit (Sesuaikan dengan pencahayaan Anda!)
-# Tip: Jika masih menempel di muka, coba naikkan batas bawah S (LOWER_SKIN[1]) sedikit.
-LOWER_SKIN = np.array([0, 30, 60], dtype=np.uint8)
-UPPER_SKIN = np.array([25, 255, 255], dtype=np.uint8)
-
-# Variabel Game
+# ==========================================================
+# GAME INITIALIZATION
+# ==========================================================
 score = 0
-rocks = []
-prev_hand_x, prev_hand_y = 0, 0
-slash_threshold = 35 
+hp = 3
+level = 1
+combo = 0
+max_combo = 0
+game_over = False
 
-# --- PARAMETER UNTUK MENGHINDARI WAJAH ---
-# Kita asumsikan wajah berada di area atas tengah frame.
-# Kita buat "Zona Terlarang" di bagian atas agar pedang tidak muncul di sana.
-forbidden_zone_height_ratio = 0.4 # 40% area atas dianggap zona wajah/gangguan
+# ==========================================================
+# CREATE STONES
+# ==========================================================
+stones = []
+STONE_COUNT = 5
+for _ in range(STONE_COUNT):
+    stones.append(
+        Stone()
+    )
 
+# ==========================================================
+# WEBCAM INITIALIZATION
+# ==========================================================
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise Exception(
+        "ERROR: Webcam tidak dapat dibuka"
+    )
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+cap.set(
+    cv2.CAP_PROP_FRAME_WIDTH,
+    FRAME_WIDTH
+)
+cap.set(
+    cv2.CAP_PROP_FRAME_HEIGHT,
+    FRAME_HEIGHT
+)
+
+# ==========================================================
+# SWIPE GESTURE VARIABLES
+# ==========================================================
+hand_positions = deque(maxlen=10)
+hand_detected = False
+hand_x = 0
+hand_y = 0
+
+# Gesture Status
+attack = False
+attack_timer = 0
+ATTACK_DURATION = 10
+SWIPE_THRESHOLD = 40
+
+# ==========================================================
+# FPS VARIABLES
+# ==========================================================
+fps = 0
+prev_tick = cv2.getTickCount()
+
+# ==========================================================
+# LEVEL SYSTEM
+# ==========================================================
+LEVEL_UP_SCORE = 10
+
+# ==========================================================
+# COLOR CONSTANTS
+# ==========================================================
+GREEN = (0, 255, 0)
+RED = (0, 0, 255)
+BLUE = (255, 0, 0)
+YELLOW = (0, 255, 255)
+WHITE = (255, 255, 255)
+
+# ==========================================================
+# DEBUG
+# ==========================================================
+print("=" * 40)
+print("GAME INITIALIZED")
+print("=" * 40)
+
+print(f"Jumlah Batu : {STONE_COUNT}")
+print(f"HP Awal     : {hp}")
+print(f"Score Awal  : {score}")
+
+print("=" * 40)
+
+# ==========================================================
+# MAIN GAME LOOP
+# ==========================================================
 while True:
     ret, frame = cap.read()
-    if not ret: break
-        
-    frame = cv2.flip(frame, 1) # Mirror
-    h, w = frame.shape[:2]
-    
-    # 1. Konversi ke HSV
-    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    
-    # 2. Manual Skin Masking
-    mask = manual_hsv_mask(hsv_frame, LOWER_SKIN, UPPER_SKIN)
-    
-    # 3. Manual Morphology (Membersihkan noise)
-    # Erosi lebih kuat untuk memisahkan koneksi tipis antara tangan dan lengan
-    mask_clean = manual_erode(mask)
-    mask_clean = manual_erode(mask_clean) # Erosi x2
-    mask_clean = manual_dilate(mask_clean)
-    mask_clean = manual_dilate(mask_clean) # Dilasi x2
-    
-    # 4. Cari Posisi Tangan dengan Heuristik (Mengabaikan Muka)
-    
-    # A. Terapkan Zona Terlarang (Forbidden Zone) di mask
-    # Ubah 40% area atas mask menjadi hitam (abaikan wajah)
-    forbidden_h = int(h * forbidden_zone_height_ratio)
-    mask_clean[0:forbidden_h, :] = 0 
-    
-    # Untuk debug: gambar garis batas zona terlarang
-    # cv2.line(frame, (0, forbidden_h), (w, forbidden_h), (0, 0, 255), 2)
+    if not ret:
+        break
+    frame = cv2.flip(frame, 1)
+    hand_detected = False
 
-    # B. Temukan Contours menggunakan OpenCV (untuk mencari blob terbesar di area valid)
-    # Ini diperbolehkan untuk 'pengenalan objek', sedangkan masking/morfologi tetap manual numpy.
-    contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    hand_x, hand_y = 0, 0
-    is_slashing = False
-    
+    # ======================================================
+    # HSV SKIN DETECTION
+    # ======================================================
+    hsv = cv2.cvtColor(
+        frame,
+        cv2.COLOR_BGR2HSV
+    )
+    lower_skin = np.array(
+        [0, 20, 70],
+        dtype=np.uint8
+    )
+    upper_skin = np.array(
+        [20, 255, 255],
+        dtype=np.uint8
+    )
+    mask = cv2.inRange(
+        hsv,
+        lower_skin,
+        upper_skin
+    )
+
+    # ======================================================
+    # MANUAL MORPHOLOGY
+    # ======================================================
+
+    small_mask = cv2.resize(
+        mask,
+        (320, 240)
+    )
+ #   small_mask = opening(
+ #       small_mask
+  #  )
+  #  small_mask = closing(
+ #       small_mask
+  #  )  
+    mask = cv2.resize(
+        small_mask,
+        (640, 480)
+    )
+
+    # ======================================================
+    # FIND CONTOUR
+    # ======================================================
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    # ======================================================
+    # HAND DETECTION
+    # ======================================================
     if contours:
-        # Cari kontur dengan area terbesar di area valid (asumsi ini adalah tangan/lengan bawah)
-        largest_contour = max(contours, key=cv2.contourArea)
-        
-        if cv2.contourArea(largest_contour) > 1000: # Batas minimum area tangan
-            # Hitung Moments untuk mencari centroid
-            M = cv2.moments(largest_contour)
+        largest = max(
+            contours,
+            key=cv2.contourArea
+        )
+        area = cv2.contourArea(
+            largest
+        )
+        if area > 3000:
+            hand_detected = True
+            hull = cv2.convexHull(
+                largest
+            )
+            cv2.drawContours(
+                frame,
+                [largest],
+                -1,
+                GREEN,
+                2
+            )
+            cv2.drawContours(
+                frame,
+                [hull],
+                -1,
+                BLUE,
+                2
+            )
+            M = cv2.moments(
+                largest
+            )
             if M["m00"] != 0:
-                hand_x = int(M["m10"] / M["m00"])
-                hand_y = int(M["m01"] / M["m00"])
-                
-                # 5. Gesture Recognition (Kecepatan)
-                distance = math.sqrt((hand_x - prev_hand_x)**2 + (hand_y - prev_hand_y)**2)
-                if distance > slash_threshold and prev_hand_x != 0:
-                    is_slashing = True
-                    
-                prev_hand_x, prev_hand_y = hand_x, hand_y
-                
-                # 6. Menempelkan Pedang (Manual Alpha Blending)
-                frame = manual_alpha_blend(frame, sword_img, hand_x, hand_y)
+                hand_x = int(
+                    M["m10"] /
+                    M["m00"]
+                )
+                hand_y = int(
+                    M["m01"] /
+                    M["m00"]
+                )
+                cv2.circle(
+                    frame,
+                    (hand_x, hand_y),
+                    8,
+                    RED,
+                    -1
+                )
+                hand_positions.append(
+                    (
+                        hand_x,
+                        hand_y
+                    )
+                )
+
+    # ======================================================
+    # SWIPE DETECTION
+    # ======================================================
+    swipe_speed = 0
+    if len(hand_positions) >= 5:
+        x1, y1 = hand_positions[0]
+        x2, y2 = hand_positions[-1]
+        dx = x2 - x1
+        dy = y2 - y1
+        swipe_speed = math.sqrt(
+            dx * dx +
+            dy * dy
+        )
+        if swipe_speed > SWIPE_THRESHOLD:
+            attack = True
+            attack_timer = ATTACK_DURATION
+
+    # ======================================================
+    # ATTACK TIMER
+    # ======================================================
+    if attack_timer > 0:
+        attack_timer -= 1
     else:
-        prev_hand_x, prev_hand_y = 0, 0 # Reset jika tangan hilang
+        attack = False
 
-    # 7. Game Logic: Batu
-    if random.random() < 0.025: 
-        rocks.append({'x': random.randint(50, w-50), 'y': -50, 'speed': random.randint(6, 14)})
-        
-    for rock in rocks[:]:
-        rock['y'] += rock['speed']
-        
-        # Menempelkan batu
-        frame = manual_alpha_blend(frame, rock_img, rock['x'], rock['y'])
-        
-        # Collision Detection
-        if hand_x != 0 and hand_y != 0:
-            dist_to_rock = math.sqrt((hand_x - rock['x'])**2 + (hand_y - rock['y'])**2)
-            if dist_to_rock < 70: # Radius benturan
-                if is_slashing:
-                    score += 10
-                    rocks.remove(rock)
-                    continue
-                
-        if rock['y'] > h + 50:
-            rocks.remove(rock)
+    # ======================================================
+    # DRAW SWORD
+    # ======================================================
+    sword_w = sword.shape[1]
+    sword_h = sword.shape[0]
+    sword_x = hand_x - sword_w // 2
+    sword_y = hand_y - sword_h // 2
+    if hand_detected:
+        frame = overlay_png(
+            frame,
+            sword,
+            sword_x,
+            sword_y
+        )
 
-    # 8. Tampilkan UI
-    cv2.putText(frame, f'SCORE: {score}', (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 255), 3)
-    if is_slashing:
-        cv2.putText(frame, 'SLASH!', (w - 180, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+    # ======================================================
+    # LEVEL SYSTEM
+    # ======================================================
+    level = (
+        score // LEVEL_UP_SCORE
+    ) + 1
 
-    # Debug windows
-    cv2.imshow('Mask Clean (Hands Only)', mask_clean)
-    cv2.imshow('Stone Slicer', frame)
+    # ======================================================
+    # UPDATE STONES
+    # ======================================================
+    if not game_over:
+        for stone in stones:
+            stone.speed = min(
+                5 + level,
+                15
+            )
+            stone.update()
+            stone.draw(frame)
+            stone_w = stone.width
+            stone_h = stone.height
+            collision = (
+                sword_x <
+                stone.x + stone_w
+                and
+                sword_x + sword_w >
+                stone.x
+                and
+                sword_y <
+                stone.y + stone_h
+                and
+                sword_y + sword_h >
+                stone.y
+            )
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+            # ==========================================
+            # HIT STONE
+            # ==========================================
+            if (
+                collision
+                and attack
+                and hand_detected
+            ):
+                score += 1
+                combo += 1
+                max_combo = max(
+                    max_combo,
+                    combo
+                )
+                stone.respawn()
+
+            # ==========================================
+            # STONE ESCAPE
+            # ==========================================
+            if stone.y > FRAME_HEIGHT:
+                hp -= 1
+                combo = 0
+                stone.respawn()
+
+    # ======================================================
+    # GAME OVER
+    # =====================================================
+    if hp <= 0:
+        game_over = True
+
+    # ======================================================
+    # FPS CALCULATION
+    # ======================================================
+    current_tick = cv2.getTickCount()
+    time_elapsed = (
+        current_tick -
+        prev_tick
+    ) / cv2.getTickFrequency()
+    prev_tick = current_tick
+    if time_elapsed > 0:
+        fps = int(
+            1 / time_elapsed
+        )
+
+    # ======================================================
+    # UI
+    # ======================================================
+    cv2.putText(
+        frame,
+        f"Score : {score}",
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        GREEN,
+        2
+    )
+    cv2.putText(
+        frame,
+        f"HP : {hp}",
+        (20, 75),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        RED,
+        2
+    )
+    cv2.putText(
+        frame,
+        f"Level : {level}",
+        (20, 110),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        YELLOW,
+        2
+    )
+    cv2.putText(
+        frame,
+        f"Combo : {combo}",
+        (20, 145),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        WHITE,
+        2
+    )
+    cv2.putText(
+        frame,
+        f"FPS : {fps}",
+        (20, 180),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        GREEN,
+        2
+    )
+    cv2.putText(
+        frame,
+        f"Swipe : {int(swipe_speed)}",
+        (20, 215),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        BLUE,
+        2
+    )
+    status = (
+        "ATTACK"
+        if attack
+        else "IDLE"
+    )
+    cv2.putText(
+        frame,
+        status,
+        (20, 250),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        YELLOW,
+        2
+    )
+
+    # ======================================================
+    # GAME OVER SCREEN
+    #=======================================================
+    if game_over:
+        cv2.putText(
+            frame,
+            "GAME OVER",
+            (150, 220),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            2,
+            RED,
+            4
+        )
+        cv2.putText(
+            frame,
+            f"FINAL SCORE : {score}",
+            (150, 280),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            WHITE,
+            3
+        )
+
+    # ======================================================
+    # SHOW WINDOWS
+    # ======================================================
+    cv2.imshow(
+        "Stone Slicer",
+        frame
+    )
+#    cv2.imshow(
+#        "Hand Mask",
+    #    mask
+ #   )
+    key = cv2.waitKey(1)
+    if key == 27:
         break
 
+# ==========================================================
+# CLEANUP
+# ==========================================================
 cap.release()
 cv2.destroyAllWindows()
